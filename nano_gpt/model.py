@@ -43,7 +43,7 @@ class CausalSelfAttention(nn.Module):
             att = F.softmax(att,dim =-1)
             att = self.resid_dropout(att)
             y = att@v #(B,nh,T,T) *(B,nh,T,hs)->(B,nh,T,hs)
-        y.transpose(1,2).contiguous().view(B,T,C)
+        y = y.transpose(1,2).contiguous().view(B,T,C)
         y = self.attn_dropout(self.c_proj(y))
         return y
 
@@ -64,10 +64,11 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
     def __init__(self,config):
-       self.ln1 = LayerNorm(config.n_embd,bias=config.bias)
-       self.attn = CausalSelfAttention(config)
-       self.ln2 = LayerNorm(config.n_embd,bias=config.bias)
-       self.mlp = MLP(config)
+        super().__init__()
+        self.ln1 = LayerNorm(config.n_embd,bias=config.bias)
+        self.attn = CausalSelfAttention(config)
+        self.ln2 = LayerNorm(config.n_embd,bias=config.bias)
+        self.mlp = MLP(config)
     def forward(self,x):
         x =x+self.attn(self.ln1(x))
         x = x+self.mlp(self.ln2(x))
@@ -112,6 +113,13 @@ class GPT(nn.Module):
         if non_embedding:
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
     def forward(self,idx,targets=None):
         device = idx.device
         b, t = idx.size()
@@ -142,7 +150,7 @@ class GPT(nn.Module):
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
         self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-        for block in self.transformer.h:
+        for block in self.transformer.blocks:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -168,6 +176,8 @@ class GPT(nn.Module):
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
         print(f"using fused AdamW: {use_fused}")
+
+        return optimizer
     def estimate_mfu(self, fwdbwd_per_iter, dt):
         """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
         # first estimate the number of flops we do per iteration.

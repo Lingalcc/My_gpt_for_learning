@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
     
 #hyperparameters
-batch_size = 32
+batch_size = 64
 block_size = 4
 max_iters = 3000
 eval_interval = 300
